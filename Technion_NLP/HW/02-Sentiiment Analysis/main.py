@@ -1,12 +1,12 @@
-from Technion_NLP.HW2.config import DATA_FILES
-from Technion_NLP.HW2.preloading import load_datasets
+from config import DATA_FILES
+from preloading import load_datasets
 
 # https://towardsdatascience.com/sentiment-analysis-on-a-imdb-movie-review-dataset-with-a-support-vector-machines-model-in-python-50c1d487327e
-
+# https://github.com/FixelAlgorithmsTeam/FixelCourses/tree/9aaefce077927432f1cd62906dba8f25e5ef0090
 
 def main():
     print("HW2 Start")
-    load_datasets(DATA_FILES)
+    train_df, test_df = load_datasets(DATA_FILES)
     print("HW2 End")
 
 

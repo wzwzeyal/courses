@@ -3,6 +3,7 @@ from preloading import load_datasets
 
 # https://towardsdatascience.com/sentiment-analysis-on-a-imdb-movie-review-dataset-with-a-support-vector-machines-model-in-python-50c1d487327e
 # https://github.com/FixelAlgorithmsTeam/FixelCourses/tree/9aaefce077927432f1cd62906dba8f25e5ef0090
+# https://coderzcolumn.com/tutorials/artificial-intelligence/how-to-use-glove-embeddings-with-pytorch
 
 def main():
     print("HW2 Start")

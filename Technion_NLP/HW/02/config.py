@@ -1,0 +1,17 @@
+DATA_PATH = "./data"
+
+EMBEDDING_DIM = 2002
+
+GLOVE_NAME = "twitter.27B"
+
+BATCH_SIZE = 128
+
+SEED = 23
+
+NOF_EPOCHS = 20
+
+FC1_DIM = 512
+
+FC2_DIM = 256
+
+DROPOUT = 0.0

@@ -8,33 +8,64 @@ from torch.utils.data import Dataset, DataLoader
 from torchtext.data import get_tokenizer
 from torchtext.vocab import GloVe
 from tqdm import tqdm
+import argparse
+import re
+
+from nltk.corpus import stopwords
 
 import nni
-import ast
+from nni.utils import merge_parameter
 
 from DeepLearningFramework.Metric import Accuracy
 from DeepLearningFramework.Training import TrainModel
 from config import *
 
+
 tqdm.pandas()
 
-import os
+tokenizer = get_tokenizer("basic_english")
+
+def strip_text(text):
+    text = re.sub(r'[^A-Za-z0-9]+', ' ', text)
+    text = re.sub(r'https?:/\/\S+', ' ', text)
+    return text.strip()
+
+def review_clean_list(text):
+    word_list = tokenizer(text)
+    strip_words = [strip_text(word) for word in word_list]
+    str_list = list(filter(None, strip_words))
+    return str_list
 
 
 class ClassificationDataset(Dataset):
 
-    def __init__(self, file_path, glove_name, embeddimg_dim):
+    def __init__(self, file_path, glove_name, embeddimg_dim, stopwords, token_type):
         print(f'processing of {file_path} started ...')
         # Read data
         self.data_df = pd.read_csv(file_path).head(1024)
+        global_vectors = GloVe(name=glove_name, dim=embeddimg_dim)
+
+        pat = r'\b(?:{})\b'.format('|'.join(stopwords))
+        # remove stop words
+        print('removing stopwords ...')
+        self.data_df['clean_review'] = self.data_df['review'].str.lower().replace(pat, '', regex=True)
+        self.data_df['clean_review'] = self.data_df['clean_review'].str.replace(r'\s+', ' ', regex=True)
+
+        self.token_type = token_type
+
+        print('cleaning words ...')
+        self.data_df['clean_review'] =  self.data_df.progress_apply(lambda x: review_clean_list(x['clean_review']), axis=1)
+
+        print('calculating mean clean tokens ...')
+        self.data_df['mean_clean_token'] =  self.data_df.progress_apply(lambda x: self.calc_mean_token(global_vectors, x['clean_review']), axis=1)
 
         print("tokenizing ...")
         tokenizer = get_tokenizer("basic_english")
         self.data_df['tokens'] = self.data_df.progress_apply(lambda x: tokenizer(x["review"]), axis=1)
 
         print("calculating mean tokens ...")
-        global_vectors = GloVe(name=glove_name, dim=embeddimg_dim)
-        self.data_df['mean_token'] = self.data_df.progress_apply(
+
+        self.data_df['mean_dirty_token'] = self.data_df.progress_apply(
             lambda x: self.calc_mean_token(global_vectors, x["tokens"]), axis=1
         )
 
@@ -44,7 +75,9 @@ class ClassificationDataset(Dataset):
         print(f'processing of {file_path} finished !')
 
     def __getitem__(self, item):
-        return {'mean_token': self.data_df.iloc[item]['mean_token'], 'target': self.data_df.iloc[item]['target']}
+        return {
+            'mean_token': self.data_df.iloc[item][self.token_type],
+            'target': self.data_df.iloc[item]['target']}
 
     def __len__(self):
         return len(self.data_df)
@@ -71,21 +104,7 @@ class EmbeddingClassifier(nn.Module):
             nn.Dropout(dropout),
 
             nn.Linear(fc2_dim, nof_classes),
-
-            # nn.Linear(fc1_dim, fc2_dim),
-            # nn.ReLU(),
-            # nn.Dropout(dropout),
-            #
-            # nn.Linear(fc2_dim, fc3_dim),
-            # nn.ReLU(),
-            # nn.Dropout(dropout),
-            #
-            # nn.Linear(fc3_dim, fc4_dim),
-            # nn.ReLU(),
-            # nn.Dropout(dropout),
-            #
-            # nn.Linear(fc4_dim, nof_classes),
-        )
+     )
 
     def forward(self, x_batch):
         return self.seq(x_batch)
@@ -151,7 +170,6 @@ def epoch_callback(model, data_dl, criteria, metric, optimizer=None, scheduler=N
 
 def main(args):
     print("HW2 Start")
-    print(os.getcwd())
 
     np.random.seed(SEED)
     torch.random.manual_seed(SEED)
@@ -166,9 +184,12 @@ def main(args):
     hidden_size_2 = args["hidden_size_2"]
     dropout = args["dropout"]
     lr = args["lr"]
+    token_type = args["token_type"]
 
-    train_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_train.csv', glove_name, embedding_dim)
-    test_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_test.csv', glove_name, embedding_dim)
+    tokenizer = get_tokenizer("basic_english")
+    stop = stopwords.words('english')
+    train_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_train.csv', glove_name, embedding_dim, stop, token_type)
+    test_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_test.csv', glove_name, embedding_dim, stop, token_type)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -203,8 +224,39 @@ def main(args):
 
     print("HW2 End")
 
+def get_params():
+    # Training settings
+
+    # {
+    #     "batch_size": {"_type": "choice", "_value": [64, 128]},
+    #     "hidden_size_1": {"_type": "choice", "_value": [256, 512, 1024]},
+    #     "hidden_size_2": {"_type": "choice", "_value": [256, 64]},
+    #     "lr": {"_type": "choice", "_value": [0.001, 0.01]},
+    #     "dropout": {"_type": "choice", "_value": [0.0, 0.2]},
+    #     "glove_args": {"_type": "choice", "_value": ["840B|300"]}
+    # }
+    parser = argparse.ArgumentParser(description='HW2')
+
+    parser.add_argument('--batch_size', type=int, default=64, metavar='N',
+                        help='input batch size for training (default: 64)')
+    parser.add_argument("--hidden_size_1", type=int, default=512, metavar='N',
+                        help='hidden layer size (default: 512)')
+    parser.add_argument("--hidden_size_2", type=int, default=512, metavar='N',
+                        help='hidden layer size (default: 512)')
+    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+                        help='learning rate (default: 0.01)')
+    parser.add_argument('--dropout', type=float, default=0.2, metavar='LR',
+                        help='learning rate (default: 0.2)')
+    parser.add_argument('--glove_args', type=str, default="840B|300", metavar='LR',
+                        help='learning rate (default: "840B|300")')
+    parser.add_argument('--token_type', type=str, default="mean_clean_token", metavar='LR',
+                        help='token type (default: "840B|300")')
+
+    args, _ = parser.parse_known_args()
+    return args
 
 if __name__ == '__main__':
     # execute only if run as the entry point into the program
     tuner_params = nni.get_next_parameter()
-    main(tuner_params)
+    params = vars(merge_parameter(get_params(), tuner_params))
+    main(params)

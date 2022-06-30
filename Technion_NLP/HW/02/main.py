@@ -9,26 +9,31 @@ from torchtext.data import get_tokenizer
 from torchtext.vocab import GloVe
 from tqdm import tqdm
 
+import nni
+import ast
+
 from DeepLearningFramework.Metric import Accuracy
 from DeepLearningFramework.Training import TrainModel
 from config import *
 
 tqdm.pandas()
 
+import os
+
 
 class ClassificationDataset(Dataset):
 
-    def __init__(self, file_path):
+    def __init__(self, file_path, glove_name, embeddimg_dim):
         print(f'processing of {file_path} started ...')
         # Read data
-        self.data_df = pd.read_csv(file_path)
+        self.data_df = pd.read_csv(file_path).head(1024)
 
         print("tokenizing ...")
         tokenizer = get_tokenizer("basic_english")
         self.data_df['tokens'] = self.data_df.progress_apply(lambda x: tokenizer(x["review"]), axis=1)
 
         print("calculating mean tokens ...")
-        global_vectors = GloVe(name=GLOVE_NAME, dim=EMBEDDING_DIM)
+        global_vectors = GloVe(name=glove_name, dim=embeddimg_dim)
         self.data_df['mean_token'] = self.data_df.progress_apply(
             lambda x: self.calc_mean_token(global_vectors, x["tokens"]), axis=1
         )
@@ -65,15 +70,21 @@ class EmbeddingClassifier(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
 
-            nn.Linear(fc2_dim, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Linear(fc2_dim, nof_classes),
 
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-
-            nn.Linear(64, nof_classes),
+            # nn.Linear(fc1_dim, fc2_dim),
+            # nn.ReLU(),
+            # nn.Dropout(dropout),
+            #
+            # nn.Linear(fc2_dim, fc3_dim),
+            # nn.ReLU(),
+            # nn.Dropout(dropout),
+            #
+            # nn.Linear(fc3_dim, fc4_dim),
+            # nn.ReLU(),
+            # nn.Dropout(dropout),
+            #
+            # nn.Linear(fc4_dim, nof_classes),
         )
 
     def forward(self, x_batch):
@@ -132,20 +143,35 @@ def epoch_callback(model, data_dl, criteria, metric, optimizer=None, scheduler=N
     epoch_loss /= count
     epoch_metric /= count
 
+    # nni.report_intermediate_result(epoch_loss)
+    nni.report_intermediate_result(epoch_metric)
+
     return epoch_loss, epoch_metric, lr_vector
 
 
-def main():
+def main(args):
     print("HW2 Start")
+    print(os.getcwd())
 
     np.random.seed(SEED)
     torch.random.manual_seed(SEED)
+    print(args)
 
-    train_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_train.csv', )
-    test_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_test.csv', )
+    # configure hyper-parameters
+    glove_args = args["glove_args"].split("|")
+    glove_name = glove_args[0]
+    embedding_dim = int(glove_args[1])
+    batch_size = args["batch_size"]
+    hidden_size_1 = args["hidden_size_1"]
+    hidden_size_2 = args["hidden_size_2"]
+    dropout = args["dropout"]
+    lr = args["lr"]
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    train_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_train.csv', glove_name, embedding_dim)
+    test_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_test.csv', glove_name, embedding_dim)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     target_classes = train_dataset.get_targets()
 
@@ -158,17 +184,20 @@ def main():
     DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     o_model = EmbeddingClassifier(
-        EMBEDDING_DIM,
-        fc1_dim=FC1_DIM,
-        fc2_dim=FC2_DIM,
-        dropout=DROPOUT,
+        embedding_dim,
+        fc1_dim=hidden_size_1,
+        fc2_dim=hidden_size_2,
+        dropout=dropout,
         nof_classes=len(target_classes)).to(DEVICE)
 
-    o_optim = optim.AdamW(o_model.parameters(), lr=0.001, betas=(0.9, 0.99), weight_decay=1e-2)
-    o_scheduler = OneCycleLR(o_optim, max_lr=0.001, total_steps=n_iter)
+    o_optim = optim.AdamW(o_model.parameters(), lr=lr, betas=(0.9, 0.99), weight_decay=1e-2)
+    o_scheduler = OneCycleLR(o_optim, max_lr=lr, total_steps=n_iter)
 
-    TrainModel(o_model, train_loader, test_loader, loss, metric, n_epochs, o_optim, o_scheduler, Epoch=epoch_callback,
+    trial_hostory = TrainModel(o_model, train_loader, test_loader, loss, metric, n_epochs, o_optim, o_scheduler, Epoch=epoch_callback,
                sModelName='EmbeddingCLS')
+
+    vTrainLoss, vTrainAcc, vValLoss, vValAcc, vLR = trial_hostory
+    nni.report_final_result(vValAcc  .max())
 
     # print(lHistory)
 
@@ -177,4 +206,5 @@ def main():
 
 if __name__ == '__main__':
     # execute only if run as the entry point into the program
-    main()
+    tuner_params = nni.get_next_parameter()
+    main(tuner_params)

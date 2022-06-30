@@ -1,0 +1,8 @@
+{
+    "batch_size": {"_type":"choice", "_value": [64, 128]},
+    "hidden_size_1":{"_type":"choice","_value":[256, 512, 1024]},
+    "hidden_size_2":{"_type":"choice","_value":[256, 64]},
+    "lr":{"_type":"choice","_value":[0.001, 0.01]},
+    "dropout":{"_type":"choice","_value":[0.0, 0.2]},
+    "glove_args":{"_type":"choice","_value":["840B|300"]}
+}

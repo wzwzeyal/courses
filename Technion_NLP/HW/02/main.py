@@ -1,70 +1,70 @@
+import argparse
+
+import nltk
+import nni
 import numpy as np
 import pandas as pd
 import torch
 import torch.optim as optim
+from matplotlib import pyplot as plt
+from nltk.corpus import stopwords
+from nni.utils import merge_parameter
 from torch import nn
 from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import Dataset, DataLoader
 from torchtext.data import get_tokenizer
 from torchtext.vocab import GloVe
 from tqdm import tqdm
-import argparse
-import re
 
-from nltk.corpus import stopwords
-
-import nni
-from nni.utils import merge_parameter
-
+from DeepLearningFramework.Auxiliary import PlotHistory
 from DeepLearningFramework.Metric import Accuracy
 from DeepLearningFramework.Training import TrainModel
 from config import *
-
+from utils import review_clean_list
 
 tqdm.pandas()
 
-tokenizer = get_tokenizer("basic_english")
-
-def strip_text(text):
-    text = re.sub(r'[^A-Za-z0-9]+', ' ', text)
-    text = re.sub(r'https?:/\/\S+', ' ', text)
-    return text.strip()
-
-def review_clean_list(text):
-    word_list = tokenizer(text)
-    strip_words = [strip_text(word) for word in word_list]
-    str_list = list(filter(None, strip_words))
-    return str_list
-
 
 class ClassificationDataset(Dataset):
+    """
 
-    def __init__(self, file_path, glove_name, embeddimg_dim, stopwords, token_type):
+    """
+    def __init__(self, file_path, glove_name, embedding_dim, stop_words, token_type):
+        """
+
+        :param file_path: path to the csv data file
+        :param glove_name: the name of the global vectors to use (e.g. 840B)
+        :param embedding_dim: the embedding dimension (e.g. 300)
+        :param stop_words:  a list of stop words
+        :param token_type: use clean or raw (mean_clean_token, mean_dirty_token)
+        """
         print(f'processing of {file_path} started ...')
-        # Read data
-        self.data_df = pd.read_csv(file_path).head(1024)
-        global_vectors = GloVe(name=glove_name, dim=embeddimg_dim)
 
-        pat = r'\b(?:{})\b'.format('|'.join(stopwords))
+        tokenizer = get_tokenizer("basic_english")
+        global_vectors = GloVe(name=glove_name, dim=embedding_dim)
+
+        # Read data
+        self.data_df = pd.read_csv(file_path)
+
         # remove stop words
         print('removing stopwords ...')
+        pat = r'\b(?:{})\b'.format('|'.join(stop_words))
         self.data_df['clean_review'] = self.data_df['review'].str.lower().replace(pat, '', regex=True)
         self.data_df['clean_review'] = self.data_df['clean_review'].str.replace(r'\s+', ' ', regex=True)
 
-        self.token_type = token_type
-
         print('cleaning words ...')
-        self.data_df['clean_review'] =  self.data_df.progress_apply(lambda x: review_clean_list(x['clean_review']), axis=1)
+        self.data_df['clean_review'] = self.data_df.progress_apply(
+            lambda x: review_clean_list(tokenizer, x['clean_review']), axis=1)
 
         print('calculating mean clean tokens ...')
-        self.data_df['mean_clean_token'] =  self.data_df.progress_apply(lambda x: self.calc_mean_token(global_vectors, x['clean_review']), axis=1)
+
+        self.data_df['mean_clean_token'] = self.data_df.progress_apply(
+            lambda x: self.calc_mean_token(global_vectors, x['clean_review']), axis=1)
 
         print("tokenizing ...")
-        tokenizer = get_tokenizer("basic_english")
         self.data_df['tokens'] = self.data_df.progress_apply(lambda x: tokenizer(x["review"]), axis=1)
 
         print("calculating mean tokens ...")
-
         self.data_df['mean_dirty_token'] = self.data_df.progress_apply(
             lambda x: self.calc_mean_token(global_vectors, x["tokens"]), axis=1
         )
@@ -73,6 +73,8 @@ class ClassificationDataset(Dataset):
         self.data_df['target'] = pd.factorize(self.data_df['sentiment'], sort=True)[0]
 
         print(f'processing of {file_path} finished !')
+
+        self.token_type = token_type
 
     def __getitem__(self, item):
         return {
@@ -84,6 +86,13 @@ class ClassificationDataset(Dataset):
 
     @staticmethod
     def calc_mean_token(global_vectors, wordlist):
+        """
+        Tokenizes the word list using the global_vectors and
+        returns its mean value (e.g. ["hello", "world"] -> [[2, 10, 4], [1, 8, 3]] -> [0.5, 9, 3.5]
+        :param global_vectors:
+        :param wordlist:
+        :return: mean value in the shape of the embedding dimension
+        """
         vectors = global_vectors.get_vecs_by_tokens(wordlist)
         return vectors.mean(dim=0)
 
@@ -93,6 +102,14 @@ class ClassificationDataset(Dataset):
 
 class EmbeddingClassifier(nn.Module):
     def __init__(self, embedding_dim, fc1_dim, fc2_dim, dropout, nof_classes):
+        """
+
+        :param embedding_dim: the embedding dimension (e.g. 300)
+        :param fc1_dim: first hidden layer size
+        :param fc2_dim: second hidden layer size
+        :param dropout: dropout factor
+        :param nof_classes: number of classes (e.g. 2)
+        """
         super(EmbeddingClassifier, self).__init__()
         self.seq = nn.Sequential(
             nn.Linear(embedding_dim, fc1_dim),
@@ -104,13 +121,24 @@ class EmbeddingClassifier(nn.Module):
             nn.Dropout(dropout),
 
             nn.Linear(fc2_dim, nof_classes),
-     )
+        )
 
     def forward(self, x_batch):
         return self.seq(x_batch)
 
 
 def epoch_callback(model, data_dl, criteria, metric, optimizer=None, scheduler=None, bTrain=True):
+    """
+    This function perform the model training loop
+    :param model:
+    :param data_dl:
+    :param criteria:
+    :param metric:
+    :param optimizer:
+    :param scheduler:
+    :param bTrain:
+    :return: model training statstics (epoch_loss, epoch_metric, lr_vector)
+    """
     epoch_loss = 0
     epoch_metric = 0
     count = 0
@@ -169,7 +197,24 @@ def epoch_callback(model, data_dl, criteria, metric, optimizer=None, scheduler=N
 
 
 def main(args):
+    """
+    HW 2 Overview code documentation
+
+    This is the main function
+    It receives the hyper parameters as arguments
+
+    1. Creates the data sets
+    2. Creates the data loaders
+    3. Builds the classifying model
+    4. Train the model
+    5. Plots and save the results
+
+    :param args: the hyper parameters for the model.
+    :return:
+    """
     print("HW2 Start")
+
+    nltk.download('stopwords')
 
     np.random.seed(SEED)
     torch.random.manual_seed(SEED)
@@ -186,10 +231,10 @@ def main(args):
     lr = args["lr"]
     token_type = args["token_type"]
 
-    tokenizer = get_tokenizer("basic_english")
-    stop = stopwords.words('english')
-    train_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_train.csv', glove_name, embedding_dim, stop, token_type)
-    test_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_test.csv', glove_name, embedding_dim, stop, token_type)
+    stop_words = stopwords.words('english')
+
+    train_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_train.csv', glove_name, embedding_dim, stop_words, token_type)
+    test_dataset = ClassificationDataset(f'{DATA_PATH}/IMDB_test.csv', glove_name, embedding_dim, stop_words, token_type)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -204,6 +249,8 @@ def main(args):
 
     DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    print(DEVICE)
+
     o_model = EmbeddingClassifier(
         embedding_dim,
         fc1_dim=hidden_size_1,
@@ -214,15 +261,18 @@ def main(args):
     o_optim = optim.AdamW(o_model.parameters(), lr=lr, betas=(0.9, 0.99), weight_decay=1e-2)
     o_scheduler = OneCycleLR(o_optim, max_lr=lr, total_steps=n_iter)
 
-    trial_hostory = TrainModel(o_model, train_loader, test_loader, loss, metric, n_epochs, o_optim, o_scheduler, Epoch=epoch_callback,
-               sModelName='EmbeddingCLS')
+    trial_hostory = TrainModel(o_model, train_loader, test_loader, loss, metric, n_epochs, o_optim, o_scheduler,
+                               Epoch=epoch_callback,
+                               sModelName='EmbeddingCLS')
 
     vTrainLoss, vTrainAcc, vValLoss, vValAcc, vLR = trial_hostory
-    nni.report_final_result(vValAcc  .max())
+    nni.report_final_result(vValAcc.max())
 
-    # print(lHistory)
+    PlotHistory(trial_hostory)
+    plt.savefig('hw2_results.png')
 
     print("HW2 End")
+
 
 def get_params():
     # Training settings
@@ -239,24 +289,29 @@ def get_params():
 
     parser.add_argument('--batch_size', type=int, default=64, metavar='N',
                         help='input batch size for training (default: 64)')
-    parser.add_argument("--hidden_size_1", type=int, default=512, metavar='N',
-                        help='hidden layer size (default: 512)')
-    parser.add_argument("--hidden_size_2", type=int, default=512, metavar='N',
-                        help='hidden layer size (default: 512)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+    parser.add_argument("--hidden_size_1", type=int, default=256, metavar='N',
+                        help='hidden layer 1 size (default: 256)')
+    parser.add_argument("--hidden_size_2", type=int, default=64, metavar='N',
+                        help='hidden layer 2 size (default: 64)')
+    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--dropout', type=float, default=0.2, metavar='LR',
-                        help='learning rate (default: 0.2)')
+                        help='dropout  (default: 0.01)')
     parser.add_argument('--glove_args', type=str, default="840B|300", metavar='LR',
-                        help='learning rate (default: "840B|300")')
-    parser.add_argument('--token_type', type=str, default="mean_clean_token", metavar='LR',
-                        help='token type (default: "840B|300")')
+                        help='glove_args rate (default: "840B|300")')
+    parser.add_argument('--token_type', type=str, default="mean_dirty_token", metavar='LR',
+                        help='token type (default: "mean_dirty_token")')
 
     args, _ = parser.parse_known_args()
     return args
 
+
 if __name__ == '__main__':
     # execute only if run as the entry point into the program
+
+    # When executed using the NNI (https://github.com/microsoft/nni) framework
+    # it get the next set of hyper parameters
+    # nni create --config config_windows.yml
     tuner_params = nni.get_next_parameter()
     params = vars(merge_parameter(get_params(), tuner_params))
     main(params)

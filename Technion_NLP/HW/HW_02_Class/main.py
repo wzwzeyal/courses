@@ -19,6 +19,27 @@ import pandas as pd
 import tqdm
 
 from preloading import load_datasets
+import torch
+import torch.nn as nn
+
+
+class RNN(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(RNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.i2h = nn.Linear(input_size + hidden_size, hidden_size)
+        self.i2o = nn.Linear(input_size + hidden_size, output_size)
+        self.softmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, input, hidden):
+        input_combined = torch.cat((input, hidden), 1)
+        hidden = self.i2h(input_combined)
+        output = self.i2o(input_combined)
+        output = self.softmax(output)
+        return output, hidden
+
+    def initHidden(self):
+        return torch.zeros(1, self.hidden_size)
 
 
 def main():
@@ -29,24 +50,33 @@ def main():
     df = load_datasets()
 
     df.to_csv('dataset.csv')
+
+    for iter in range(1, n_iters + 1):
+        category, line, category_tensor, line_tensor = randomTrainingExample()
+        train()
     print(len(df))
 
-    #
-    #
-    #
-    # for n in range(0x90, 0xAB):
-    #     c = str(hex(n))[2:].upper()
-    #     print(c)
-
-    # for a in soup.find_all('a', href=True):
-    #     print(a)
-
-    # print(titles[4].text)
+learning_rate = 0.005 # If you set this too high, it might explode. If too low, it might not learn
 
 
+def train(category_tensor, line_tensor):
+    criterion = nn.NLLLoss()
+    rnn = RNN(10, 11, 12)
+    hidden = rnn.initHidden()
 
+    rnn.zero_grad()
 
+    for i in range(line_tensor.size()[0]):
+        output, hidden = rnn(line_tensor[i], hidden)
 
+    loss = criterion(output, category_tensor)
+    loss.backward()
+
+    # Add parameters' gradients to their values, multiplied by learning rate
+    for p in rnn.parameters():
+        p.data.add_(p.grad.data, alpha=-learning_rate)
+
+    return output, loss.item()
 
 
 if __name__ == '__main__':
@@ -59,5 +89,3 @@ if __name__ == '__main__':
     # params = vars(merge_parameter(get_params(), tuner_params))
     # main(params)
     main()
-
-

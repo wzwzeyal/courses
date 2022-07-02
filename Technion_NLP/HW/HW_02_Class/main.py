@@ -18,6 +18,7 @@ from bs4 import BeautifulSoup as bs
 import pandas as pd
 import tqdm
 
+from Technion_NLP.HW.HW_02_Class.utils import randomTrainingExample
 from preloading import load_datasets
 import torch
 import torch.nn as nn

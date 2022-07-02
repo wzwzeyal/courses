@@ -23,3 +23,15 @@ def lineToTensor(line):
     for i, letter in enumerate(line):
       tensor[i][0][letterToIndex(letter)] = 1
     return tensor
+
+import random
+
+def randomChoice(l):
+    return l[random.randint(0, len(l) - 1)]
+
+def randomTrainingExample(all_categories):
+    category = randomChoice(all_categories)
+    line = randomChoice(category_lines[category])
+    category_tensor = torch.tensor([all_categories.index(category)], dtype=torch.long)
+    line_tensor = lineToTensor(line)
+    return category, line, category_tensor, line_tensor

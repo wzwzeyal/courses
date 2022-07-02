@@ -51,6 +51,8 @@ def main():
 
     df.to_csv('dataset.csv')
 
+    n_iters = 100000
+
     for iter in range(1, n_iters + 1):
         category, line, category_tensor, line_tensor = randomTrainingExample()
         train()

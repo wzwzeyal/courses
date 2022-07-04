@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup as bs
 import pandas as pd
 import tqdm
 
-from Technion_NLP.HW.HW_02_Class.utils import randomTrainingExample
+from Technion_NLP.HW.HW_02_Class.utils import randomTrainingExample, categoryFromOutput, timeSince, n_letters
 from preloading import load_datasets
 import torch
 import torch.nn as nn
@@ -44,27 +44,59 @@ class RNN(nn.Module):
 
 
 def main():
-    print(ord(u"א"))
-
     # URL = 'https://www.baby-names.co.il/category/%D7%9B%D7%9C-%D7%94%D7%A9%D7%9E%D7%95%D7%AA/%D7%A9%D7%9E%D7%95%D7%AA-%D7%9C%D7%91%D7%A0%D7%99%D7%9D/?ap=%D7%90'
 
-    df = load_datasets()
+    # df = load_datasets()
 
-    df.to_csv('dataset.csv')
+    # df.to_csv('dataset.csv')
+
+    df = pd.read_csv('dataset.csv')
+
+    df['target'] = pd.factorize(df['gender'], sort=True)[0]
+
+    import time
+    import math
 
     n_iters = 100000
+    print_every = 5000
+    plot_every = 1000
+
+    # Keep track of losses for plotting
+    current_loss = 0
+    all_losses = []
+
+    start = time.time()
+
+    all_catgories = sorted(df["gender"].unique())
 
     for iter in range(1, n_iters + 1):
-        category, line, category_tensor, line_tensor = randomTrainingExample()
-        train()
+        random_row = df.sample(1)
+        category, line, category_tensor, line_tensor = randomTrainingExample(random_row)
+        output, loss = train(category_tensor, line_tensor, len(all_catgories))
+        current_loss += loss
+
+        # Print iter number, loss, name and guess
+        if iter % print_every == 0:
+            guess, guess_i = categoryFromOutput(all_catgories, output)
+            correct = '✓' if guess == category else '✗ (%s)' % category
+            print('%d %d%% (%s) %.4f %s / %s %s' % (
+            iter, iter / n_iters * 100, timeSince(start), loss, line, guess, correct))
+
+        # Add current loss avg to list of losses
+        if iter % plot_every == 0:
+            all_losses.append(current_loss / plot_every)
+            current_loss = 0
     print(len(df))
 
 learning_rate = 0.005 # If you set this too high, it might explode. If too low, it might not learn
 
 
-def train(category_tensor, line_tensor):
+def train(category_tensor, line_tensor, n_categories):
     criterion = nn.NLLLoss()
-    rnn = RNN(10, 11, 12)
+
+    n_hidden = 128
+    rnn = RNN(n_letters, n_hidden, n_categories)
+
     hidden = rnn.initHidden()
 
     rnn.zero_grad()
